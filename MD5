@@ -1,8 +1,8 @@
-733859e5eba76c0f4dfa214b5b760e4f *DESCRIPTION
+8d84c23994aaf63015e945f10cf60b66 *DESCRIPTION
 4bd8ca7d2c5855e662495454d9040e6c *NAMESPACE
-f2cf8f246f24be258b60853b54e3ec9d *NEWS.md
-f03f0f15942c8abf7c3ed2e284c6b6b8 *R/main.R
-e2b1a5ebaad7f4809477cf51a5b627df *R/xpect.R
-66d4f14694b00b0c7a5d61107243fe7a *man/xpect.Rd
+4405a7360ff2f5d73d9c1c0b3bd7d3fd *NEWS.md
+dc76fe80f13323b55e7df210ac91cad9 *R/main.R
+fc6ff18de2e100ed6fac1b778614e3aa *R/xpect.R
+1c14a5051cbbe4acbeef8e0571f6a34b *man/xpect.Rd
 162cb2bfd3a1bcc36857b15365dfabdb *tests/testthat.R
 5035e704901c1b558a19a23c4b56bcd6 *tests/testthat/test-xpect.R

@@ -193,11 +193,74 @@ transformation <- function(predictors, future, past, coverage)
   return(out)
 }
 
+####
+conformal_predictor <- function(data, target, newdata, calib_rate, n_sim,
+                                nrounds, max_depth, eta, gamma, alpha,
+                                lambda, subsample, colsample_bytree, seed,
+                                nthread = NULL)
+{
+  set.seed(seed)
+
+  # --- split
+  n <- nrow(data)
+  calib_size <- floor(calib_rate * n)
+  calib_indices <- sample.int(n, size = calib_size, replace = FALSE)
+  train_indices <- setdiff(seq_len(n), calib_indices)
+
+  train_data <- data[train_indices, , drop = FALSE]
+  calib_data <- data[calib_indices, , drop = FALSE]
+
+  train_y <- train_data[[target]]
+  train_X <- train_data[, setdiff(names(train_data), target), drop = FALSE]
+
+  # --- build DMatrix (label here is still correct usage)
+  dtrain <- xgboost::xgb.DMatrix(data = as.matrix(train_X), label = train_y)
+
+  # --- future-proof params (use descriptive names + xgb.params)
+  params <- xgboost::xgb.params(
+    objective       = "reg:squarederror",
+    max_depth       = max_depth,
+    learning_rate   = eta,               # was: eta
+    min_split_loss  = gamma,             # was: gamma
+    reg_alpha       = alpha,             # was: alpha
+    reg_lambda      = lambda,            # was: lambda
+    subsample       = subsample,
+    colsample_bytree= colsample_bytree,
+    seed            = seed
+  )
+  if (!is.null(nthread)) {
+    params$nthread <- as.integer(nthread)
+  }
+
+  model <- xgboost::xgb.train(
+    params  = params,
+    data    = dtrain,
+    nrounds = nrounds,
+    verbose = 0
+  )
+
+  # --- calibration residuals
+  calib_y <- calib_data[[target]]
+  calib_X <- calib_data[, setdiff(names(calib_data), target), drop = FALSE]
+  dcalib  <- xgboost::xgb.DMatrix(data = as.matrix(calib_X))
+  calib_pred <- predict(model, dcalib)
+
+  calib_errors <- calib_y - calib_pred
+
+  # --- new point prediction + conformal simulation
+  dnew <- xgboost::xgb.DMatrix(data = as.matrix(newdata))
+  new_point <- as.numeric(predict(model, dnew))
+
+  # new_point is scalar for 1-row newdata; keep your interface (list of draws)
+  new_preds <- list(new_point + sample(calib_errors, size = n_sim, replace = TRUE))
+  return(new_preds)
+}
+
 
 
 
 #####
-conformal_predictor <- function(data, target, newdata, calib_rate, n_sim,
+old_conformal_predictor <- function(data, target, newdata, calib_rate, n_sim,
                                 nrounds, max_depth, eta, gamma, alpha,
                                 lambda, subsample, colsample_bytree, seed)
 {
@@ -319,12 +382,80 @@ entropy <- function(pred_fun)
   out <- adaptIntegrate(integrand, p_range[1],  p_range[2])$integral
   return(out)
 }
+##############
+random_search <- function(predictors, target, future,
+                          past, coverage, max_depth,
+                          eta, gamma, alpha, lambda,
+                          subsample, colsample_bytree,
+                          n_samples, calib_rate,
+                          n_sim, nrounds, seed)
+{
+  set.seed(seed)
 
+  params <- list(
+    past = past, coverage = coverage, max_depth = max_depth, eta = eta, gamma = gamma,
+    alpha = alpha, lambda = lambda, subsample = subsample, colsample_bytree = colsample_bytree
+  )
 
+  default <- list(
+    past = c(1L, 30L),
+    coverage = c(0.05, 0.95),
+    max_depth = c(3L, 10L),
+    eta = c(0.01, 0.3),
+    gamma = c(0, 5),
+    alpha = c(0, 1),
+    lambda = c(0, 1),
+    subsample = c(0, 1),
+    colsample_bytree = c(0, 1)
+  )
+
+  params <- purrr::map2(params, default, ~ sampler(.x, n_samples, range = .y))
+
+  # IMPORTANT: in multisession, each worker gets its own R session.
+  # furrr_options(seed = TRUE) gives reproducible RNG streams on workers.
+  future::plan(future::multisession, workers = max(1, future::availableCores() - 1))
+
+  models <- furrr::future_pmap(
+    params,
+    ~ tryCatch(
+        engine(
+          predictors, target, future,
+          past = ..1, coverage = ..2,
+          max_depth = ..3, eta = ..4,
+          gamma = ..5, alpha = ..6,
+          lambda = ..7, subsample = ..8,
+          colsample_bytree = ..9,
+          calib_rate = calib_rate, n_sim = n_sim,
+          nrounds = nrounds, seed = seed
+        ),
+        error = function(e) NA
+      )
+    ,
+    .options = furrr::furrr_options(seed = TRUE)
+  )
+
+  # Robust scoring: NA models -> Inf score, so they can't win
+  entropy <- purrr::map(models, function(m) {
+    if (is.list(m)) seq_ent(m) else NA_real_
+  })
+
+  score <- purrr::map_dbl(entropy, function(evec) {
+    if (all(is.na(evec))) Inf else mean(evec[is.finite(evec)])
+  })
+
+  history <- round(cbind(as.data.frame(params), entropy = score), 4)
+
+  best_idx <- which.min(score)
+  best_model <- models[[best_idx]]
+  best_params <- history[best_idx, , drop = FALSE]
+
+  out <- list(history = history, best_model = best_model, best_params = best_params)
+  return(out)
+}
 
 ##############
 
-random_search <- function(predictors, target, future,
+old_random_search <- function(predictors, target, future,
                           past, coverage, max_depth,
                           eta, gamma, alpha, lambda,
                           subsample, colsample_bytree,
@@ -337,7 +468,7 @@ random_search <- function(predictors, target, future,
                  alpha = alpha, lambda = lambda, subsample = subsample, colsample_bytree = colsample_bytree)
 
   default <- list(past = c(1L, 30L), coverage = c(0.05, 0.95), max_depth = c(3L, 10L), eta = c(0.01, 0.3),
-                  gamma = c(0, 5), alpha = c(0, 1), lambda = c(0, 1), subsample = c(0, 1), colsample_bytree = c(0, 1))
+                  gamma = c(0, 5), alpha = c(0.0, 1.0), lambda = c(0.0, 1.0), subsample = c(0.0, 1.0), colsample_bytree = c(0.0, 1.0))
 
   params <- map2(params, default, ~ sampler(.x, n_samples, range = .y))
 
@@ -424,10 +555,53 @@ coarse_to_fine_search <- function(predictors, target, future,
   return(outcome)
 }
 
+####
+sampler <- function(vect, n_samp, range = NULL)
+{
+  # If user did not provide a vector, create one from the default "range"
+  if (is.null(vect)) {
+
+    if (is.integer(range)) {
+      # integer hyperparams: keep integers (critical for past, max_depth, etc.)
+      lo <- as.integer(min(range))
+      hi <- as.integer(max(range))
+      vect <- as.integer(lo:hi)
+
+    } else if (is.numeric(range)) {
+      # continuous hyperparams
+      vect <- seq(min(range), max(range), length.out = 1000)
+
+    } else if (is.character(range) || is.logical(range)) {
+      vect <- range
+    }
+  }
+
+  # If vect is length-2 "bounds" (common), sample uniformly from that interval
+  if (is.numeric(vect) && length(vect) == 2L && !is.integer(vect)) {
+    vect <- seq(min(vect), max(vect), length.out = 1000)
+  }
+  if (is.integer(vect) && length(vect) == 2L) {
+    vect <- as.integer(min(vect):max(vect))
+  }
+
+  # Sample
+  if (length(vect) == 1L) {
+    samp <- rep(vect, n_samp)
+  } else {
+    samp <- sample(vect, n_samp, replace = TRUE)
+  }
+
+  # Preserve integer-ness when the support is integer-like
+  if (is.integer(vect)) {
+    samp <- as.integer(samp)
+  }
+
+  return(samp)
+}
 
 
 ####
-sampler <- function(vect, n_samp, range = NULL)
+old_sampler <- function(vect, n_samp, range = NULL)
 {
   if(is.null(vect))
   {

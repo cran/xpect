@@ -2,8 +2,8 @@
 % Please edit documentation in R/main.R, R/xpect.R
 \docType{package}
 \name{xpect}
-\alias{xpect}
 \alias{xpect-package}
+\alias{xpect}
 \title{xpect}
 \usage{
 xpect(
@@ -84,8 +84,8 @@ A list containing:
 }
 }
 \description{
-This function implements probabilistic time series forecasting by combining gradient-boosted regression (XGBoost)
-with conformal inference techniques. It produces predictive distributions capturing uncertainty and optimizes
+This function implements probabilistic time series forecasting by combining gradient-boosted regression (gbtree booster)
+with conformal inference approach. It produces predictive distributions capturing uncertainty and optimizes
 hyper parameters through Bayesian, coarse-to-fine, or random search methods. The approach leverages historical
 observations from predictor series to estimate the future values of a specified target series. Users can customize
 the forecasting model extensively by setting parameters for model complexity, regularization, and conformal
